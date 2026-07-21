@@ -80,6 +80,12 @@
   .gauge-label{font-size:12px; color:var(--muted);}
   .gauge-value{font-family:var(--font-display); font-size:16px; font-weight:700;}
 
+  .storm-row{
+    margin-top:12px; padding:10px 12px; border-radius:12px; font-size:12.5px;
+    background:rgba(224,168,62,0.14); border:1px solid rgba(224,168,62,0.4); color:var(--paper);
+  }
+  .storm-row.high{background:rgba(211,105,122,0.16); border-color:rgba(211,105,122,0.45);}
+
   .daytabs{display:flex; gap:8px; overflow-x:auto; padding:0 16px 12px; scrollbar-width:none;}
   .daytabs::-webkit-scrollbar{display:none;}
   .daytab{
@@ -181,6 +187,7 @@
     <div class="hero-meta">
       <span>Gefühlt <b id="heroFeels">–</b></span>
       <span>Wind <b id="heroWind">–</b></span>
+      <span>UV-Index <b id="heroUV">–</b></span>
       <span>Sonne <b id="heroSun">–</b></span>
     </div>
   </div>
@@ -191,6 +198,7 @@
       <div class="gauge-value" id="gaugeValue">–</div>
     </div>
   </div>
+  <div id="stormRow" class="storm-row" style="display:none;"></div>
 </div>
 
 <div id="daytabs" class="daytabs"></div>
@@ -219,7 +227,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.0
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.1
 </div>
 
 <!-- Standort-Modal -->
@@ -236,7 +244,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.0";
+const APP_VERSION = "v1.1";
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -306,8 +314,8 @@ const WCODE = {
 async function fetchForecast(loc) {
   const modelIds = MODELS.map(m => m.id).join(",");
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}` +
-    `&hourly=temperature_2m,precipitation_probability,weather_code` +
-    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset` +
+    `&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m,cape` +
+    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max` +
     `&models=${modelIds}&timezone=Europe%2FBerlin&forecast_days=6&wind_speed_unit=kmh`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("Vorhersage nicht erreichbar");
@@ -364,6 +372,11 @@ function processForecast(raw) {
     row.low = Math.min(...vals);
     row.high = Math.max(...vals);
     row.wcode = raw.hourly[fieldFor("weather_code", 0, MODELS[0].id)]?.[i];
+    row.wind = raw.hourly[fieldFor("wind_speed_10m", 0, MODELS[0].id)]?.[i];
+    row.gust = raw.hourly[fieldFor("wind_gusts_10m", 0, MODELS[0].id)]?.[i];
+    row.cape = raw.hourly[fieldFor("cape", 0, MODELS[0].id)]?.[i];
+    const precipVals = MODELS.map(m => row[`precip_${m.id}`]).filter(v => v != null);
+    row.precipAvg = precipVals.length ? precipVals.reduce((a,b)=>a+b,0)/precipVals.length : null;
     return row;
   });
 
@@ -389,6 +402,7 @@ function processForecast(raw) {
       })),
       sunrise: raw.daily.sunrise?.[i],
       sunset: raw.daily.sunset?.[i],
+      uvMax: raw.daily.uv_index_max?.[i],
     };
   });
 }
@@ -414,11 +428,15 @@ function renderHero() {
   document.getElementById("heroTemp").textContent = Math.round(avg);
   document.getElementById("heroCond").textContent = WCODE[row.wcode] ?? "–";
   document.getElementById("heroFeels").textContent = Math.round(avg) + "°";
-  document.getElementById("heroWind").textContent = "–";
+  document.getElementById("heroWind").textContent =
+    row.wind != null ? Math.round(row.wind) + " km/h" + (row.gust != null && row.gust > row.wind + 10 ? " (Böen " + Math.round(row.gust) + ")" : "") : "–";
+  document.getElementById("heroUV").textContent = today && today.uvMax != null ? today.uvMax.toFixed(1) : "–";
   if (today) {
     document.getElementById("heroSun").textContent =
       (today.sunrise ? fmtTime(today.sunrise) : "–") + " / " + (today.sunset ? fmtTime(today.sunset) : "–");
   }
+
+  renderStormRow();
 
   const spread = row.high - row.low;
   let label, color;
@@ -444,6 +462,32 @@ function drawGauge(spread, color) {
     <path d="M ${x1} ${y1} A ${r} ${r} 0 1 1 ${x2} ${y2}" fill="none" stroke="#3a3227" stroke-width="6" stroke-linecap="round"/>
     <path d="M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${px} ${py}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round"/>
   `;
+}
+
+function renderStormRow() {
+  const el = document.getElementById("stormRow");
+  const now = Date.now();
+  const upcoming = hourlyRows.filter(r => {
+    const t = new Date(r.time).getTime();
+    return t >= now - 30*60*1000 && t <= now + 6*60*60*1000;
+  });
+  if (!upcoming.length) { el.style.display = "none"; return; }
+
+  const maxCape = Math.max(...upcoming.map(r => r.cape ?? 0));
+  const thunderHour = upcoming.find(r => [95,96,99].includes(r.wcode));
+
+  if (thunderHour || maxCape >= 1000) {
+    el.className = "storm-row" + (thunderHour || maxCape >= 1800 ? " high" : "");
+    const when = thunderHour ? fmtHour(thunderHour.time) + " Uhr" : "in den nächsten Stunden";
+    el.textContent = `⚡ Gewitterpotenzial: ${maxCape >= 1800 || thunderHour ? "erhöht" : "möglich"} (${when}, CAPE bis ${Math.round(maxCape)} J/kg)`;
+    el.style.display = "block";
+  } else if (maxCape >= 400) {
+    el.className = "storm-row";
+    el.textContent = `Geringes Gewitterpotenzial in den nächsten 6 Std. (CAPE bis ${Math.round(maxCape)} J/kg)`;
+    el.style.display = "block";
+  } else {
+    el.style.display = "none";
+  }
 }
 
 function renderDayTabs() {
@@ -484,7 +528,21 @@ function renderChart() {
       pointRadius: 0,
       tension: 0.3,
       order: 1,
+      yAxisID: "y",
     })),
+    {
+      label: "Regenwahrsch.",
+      data: rows.map(r => r.precipAvg),
+      borderColor: "#5aa8ff",
+      borderWidth: 2,
+      borderDash: [1, 3],
+      backgroundColor: "rgba(90,168,255,0.08)",
+      fill: true,
+      pointRadius: 0,
+      tension: 0.3,
+      order: 2,
+      yAxisID: "y1",
+    },
   ];
 
   const ctx = document.getElementById("tempChart").getContext("2d");
@@ -499,12 +557,17 @@ function renderChart() {
         legend: { display: false },
         tooltip: {
           filter: (item) => item.dataset.label !== "Spanne",
-          callbacks: { label: (item) => `${item.dataset.label}: ${item.formattedValue}°C` }
+          callbacks: {
+            label: (item) => item.dataset.label === "Regenwahrsch."
+              ? `Regenwahrsch.: ${item.formattedValue}%`
+              : `${item.dataset.label}: ${item.formattedValue}°C`
+          }
         }
       },
       scales: {
         x: { ticks: { color: "#a89a85", maxTicksLimit: 8 }, grid: { color: "#3a3227" } },
-        y: { ticks: { color: "#a89a85", callback: (v) => v + "°" }, grid: { color: "#3a3227" } }
+        y: { position: "left", ticks: { color: "#a89a85", callback: (v) => v + "°" }, grid: { color: "#3a3227" } },
+        y1: { position: "right", min: 0, max: 100, ticks: { color: "#5aa8ff", callback: (v) => v + "%" }, grid: { display: false } }
       }
     }
   });
@@ -512,7 +575,7 @@ function renderChart() {
   const legend = document.getElementById("legend");
   legend.innerHTML = MODELS.map(m =>
     `<div class="legend-item"><span class="legend-swatch" style="background:${m.color}"></span>${m.short}</div>`
-  ).join("");
+  ).join("") + `<div class="legend-item"><span class="legend-swatch" style="background:#5aa8ff"></span>Regen %</div>`;
 
   document.getElementById("chartCard").style.display = "block";
 }
@@ -599,8 +662,26 @@ function renderRadar(radarJson) {
     }
   }
   ctx.putImageData(img, 0, 0);
+
+  // Standort-Marker: Anfrage war lat/lon + distance-zentriert, daher liegt der
+  // gewählte Ort näherungsweise in der Mitte des zurückgegebenen Ausschnitts.
+  const mx = w / 2, my = h / 2;
+  ctx.strokeStyle = "#f3ede1";
+  ctx.lineWidth = Math.max(1, w * 0.006);
+  ctx.beginPath();
+  ctx.moveTo(mx - w*0.03, my); ctx.lineTo(mx + w*0.03, my);
+  ctx.moveTo(mx, my - h*0.03); ctx.lineTo(mx, my + h*0.03);
+  ctx.stroke();
+  ctx.beginPath();
+  ctx.arc(mx, my, Math.max(2, w*0.012), 0, Math.PI*2);
+  ctx.fillStyle = "#c98a4b";
+  ctx.fill();
+  ctx.strokeStyle = "#1b1712";
+  ctx.lineWidth = Math.max(1, w*0.004);
+  ctx.stroke();
+
   document.getElementById("radarTime").textContent =
-    "Stand " + fmtTime(frame.timestamp) + " Uhr · Umkreis 150 km";
+    "Stand " + fmtTime(frame.timestamp) + " Uhr · Umkreis 150 km um " + current.name;
   wrap.style.display = "block";
 }
 
