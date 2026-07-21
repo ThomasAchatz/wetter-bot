@@ -123,6 +123,14 @@
   canvas.radar{width:100%; display:block; image-rendering:pixelated;}
   .radar-empty{padding:24px; text-align:center; color:var(--muted); font-size:13px;}
   .radar-time{font-size:11px; color:var(--muted); margin-top:8px; text-align:center;}
+  .radar-controls{display:flex; align-items:center; gap:10px; margin-top:10px;}
+  .radar-controls .icon-btn{flex-shrink:0; width:34px; height:34px; font-size:13px;}
+  .radar-slider{flex:1; -webkit-appearance:none; appearance:none; height:4px; border-radius:99px;
+    background:var(--border); outline:none;}
+  .radar-slider::-webkit-slider-thumb{-webkit-appearance:none; appearance:none; width:16px; height:16px;
+    border-radius:50%; background:var(--copper); border:2px solid var(--paper); cursor:pointer;}
+  .radar-slider::-moz-range-thumb{width:16px; height:16px; border-radius:50%; background:var(--copper);
+    border:2px solid var(--paper); cursor:pointer;}
 
   .footer-note{color:var(--muted); font-size:10px; text-align:center; margin:18px 32px 0; line-height:1.5;}
 
@@ -215,9 +223,13 @@
 </div>
 
 <div id="radarCard" class="card" style="display:none;">
-  <div class="card-title">Regenradar <span class="card-sub">DWD RADOLAN</span></div>
+  <div class="card-title">Regenradar <span class="card-sub" id="radarSubtitle">DWD RADOLAN</span></div>
   <div class="radar-canvas-wrap"><canvas id="radarCanvas" class="radar"></canvas></div>
   <div class="radar-time" id="radarTime"></div>
+  <div class="radar-controls">
+    <button class="icon-btn" id="radarPlayBtn" title="Abspielen">▶</button>
+    <input type="range" id="radarSlider" class="radar-slider" min="0" max="0" value="0" step="1">
+  </div>
 </div>
 
 <div id="overviewCard" class="card" style="display:none;">
@@ -227,7 +239,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.1
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.2
 </div>
 
 <!-- Standort-Modal -->
@@ -244,7 +256,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.1";
+const APP_VERSION = "v1.2";
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -635,15 +647,39 @@ function radarColor(v) {
   return [160, 30, 60, 255];
 }
 
+let radarFrames = [];
+let radarPlaying = false;
+let radarPlayTimer = null;
+
 function renderRadar(radarJson) {
   const wrap = document.getElementById("radarCard");
-  const canvas = document.getElementById("radarCanvas");
+  const slider = document.getElementById("radarSlider");
   if (!radarJson || !radarJson.radar || !radarJson.radar.length) {
     wrap.style.display = "block";
-    canvas.parentElement.innerHTML = `<div class="radar-empty">Regenradar gerade nicht verfügbar.</div>`;
+    document.getElementById("radarCanvas").parentElement.innerHTML =
+      `<div class="radar-empty">Regenradar gerade nicht verfügbar.</div>`;
+    document.querySelector(".radar-controls").style.display = "none";
     return;
   }
-  const frame = radarJson.radar[radarJson.radar.length - 1];
+  radarFrames = radarJson.radar;
+  slider.max = radarFrames.length - 1;
+
+  // Standard: Frame am nächsten zu "jetzt" anzeigen
+  const now = Date.now();
+  let startIdx = 0, diff = Infinity;
+  radarFrames.forEach((f, i) => {
+    const d = Math.abs(new Date(f.timestamp).getTime() - now);
+    if (d < diff) { diff = d; startIdx = i; }
+  });
+  slider.value = startIdx;
+  drawRadarFrame(startIdx);
+  wrap.style.display = "block";
+}
+
+function drawRadarFrame(idx) {
+  const frame = radarFrames[idx];
+  if (!frame) return;
+  const canvas = document.getElementById("radarCanvas");
   const grid = frame.precipitation_5;
   const h = grid.length, w = grid[0].length;
   canvas.width = w; canvas.height = h;
@@ -653,11 +689,11 @@ function renderRadar(radarJson) {
     for (let x = 0; x < w; x++) {
       const v = grid[y][x] / 10; // Bright Sky liefert 1/10 mm
       const col = radarColor(v);
-      const idx = (y * w + x) * 4;
+      const px = (y * w + x) * 4;
       if (col) {
-        img.data[idx] = col[0]; img.data[idx+1] = col[1]; img.data[idx+2] = col[2]; img.data[idx+3] = col[3];
+        img.data[px] = col[0]; img.data[px+1] = col[1]; img.data[px+2] = col[2]; img.data[px+3] = col[3];
       } else {
-        img.data[idx+3] = 0;
+        img.data[px+3] = 0;
       }
     }
   }
@@ -680,10 +716,41 @@ function renderRadar(radarJson) {
   ctx.lineWidth = Math.max(1, w*0.004);
   ctx.stroke();
 
+  const t = new Date(frame.timestamp).getTime();
+  const now = Date.now();
+  const minutesDelta = Math.round((t - now) / 60000);
+  const tag = minutesDelta > 2 ? `Vorhersage +${minutesDelta} Min` :
+              minutesDelta < -2 ? `${Math.abs(minutesDelta)} Min zurück` : "Jetzt";
   document.getElementById("radarTime").textContent =
-    "Stand " + fmtTime(frame.timestamp) + " Uhr · Umkreis 150 km um " + current.name;
-  wrap.style.display = "block";
+    `${fmtTime(frame.timestamp)} Uhr · ${tag} · Umkreis 150 km um ${current.name}`;
 }
+
+document.getElementById("radarSlider").addEventListener("input", (e) => {
+  stopRadarPlay();
+  drawRadarFrame(+e.target.value);
+});
+
+document.getElementById("radarPlayBtn").onclick = () => {
+  radarPlaying ? stopRadarPlay() : startRadarPlay();
+};
+
+function startRadarPlay() {
+  if (!radarFrames.length) return;
+  radarPlaying = true;
+  document.getElementById("radarPlayBtn").textContent = "❚❚";
+  const slider = document.getElementById("radarSlider");
+  radarPlayTimer = setInterval(() => {
+    let next = (+slider.value + 1) % radarFrames.length;
+    slider.value = next;
+    drawRadarFrame(next);
+  }, 400);
+}
+function stopRadarPlay() {
+  radarPlaying = false;
+  document.getElementById("radarPlayBtn").textContent = "▶";
+  clearInterval(radarPlayTimer);
+}
+
 
 // ---------- Standort-Modal ----------
 function renderFavList() {
