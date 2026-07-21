@@ -239,7 +239,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.2
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.3
 </div>
 
 <!-- Standort-Modal -->
@@ -256,7 +256,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.2";
+const APP_VERSION = "v1.3";
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -326,11 +326,25 @@ const WCODE = {
 async function fetchForecast(loc) {
   const modelIds = MODELS.map(m => m.id).join(",");
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}` +
-    `&hourly=temperature_2m,precipitation_probability,weather_code,wind_speed_10m,wind_gusts_10m,cape` +
-    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset,uv_index_max` +
-    `&models=${modelIds}&timezone=Europe%2FBerlin&forecast_days=6&wind_speed_unit=kmh`;
+    `&hourly=temperature_2m,precipitation_probability,weather_code` +
+    `&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max,sunrise,sunset` +
+    `&models=${modelIds}&timezone=Europe%2FBerlin&forecast_days=6`;
   const res = await fetch(url);
   if (!res.ok) throw new Error("Vorhersage nicht erreichbar");
+  return res.json();
+}
+
+// Wind, CAPE und UV-Index laufen bewusst über eine EIGENE, modellunabhängige Anfrage
+// (best_match) statt über die 3-Modell-Kombination — dort kamen sie unzuverlässig zurück,
+// vermutlich weil nicht jedes Modell jede Variable liefert.
+async function fetchExtras(loc) {
+  const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}` +
+    `&current=wind_speed_10m,wind_gusts_10m` +
+    `&hourly=cape` +
+    `&daily=uv_index_max` +
+    `&timezone=Europe%2FBerlin&forecast_days=2&wind_speed_unit=kmh`;
+  const res = await fetch(url);
+  if (!res.ok) return null;
   return res.json();
 }
 
@@ -369,6 +383,15 @@ async function geocode(query) {
 let hourlyRows = [];
 let dailyRows = [];
 let dayIdx = 0;
+let extras = { wind: null, gust: null, uvMax: null, capeHourly: [] };
+
+function processExtras(raw) {
+  if (!raw) { extras = { wind: null, gust: null, uvMax: null, capeHourly: [] }; return; }
+  extras.wind = raw.current?.wind_speed_10m ?? null;
+  extras.gust = raw.current?.wind_gusts_10m ?? null;
+  extras.uvMax = raw.daily?.uv_index_max?.[0] ?? null;
+  extras.capeHourly = (raw.hourly?.time || []).map((t, i) => ({ time: t, cape: raw.hourly.cape?.[i] }));
+}
 
 function processForecast(raw) {
   const times = raw.hourly.time;
@@ -384,9 +407,6 @@ function processForecast(raw) {
     row.low = Math.min(...vals);
     row.high = Math.max(...vals);
     row.wcode = raw.hourly[fieldFor("weather_code", 0, MODELS[0].id)]?.[i];
-    row.wind = raw.hourly[fieldFor("wind_speed_10m", 0, MODELS[0].id)]?.[i];
-    row.gust = raw.hourly[fieldFor("wind_gusts_10m", 0, MODELS[0].id)]?.[i];
-    row.cape = raw.hourly[fieldFor("cape", 0, MODELS[0].id)]?.[i];
     const precipVals = MODELS.map(m => row[`precip_${m.id}`]).filter(v => v != null);
     row.precipAvg = precipVals.length ? precipVals.reduce((a,b)=>a+b,0)/precipVals.length : null;
     return row;
@@ -414,7 +434,6 @@ function processForecast(raw) {
       })),
       sunrise: raw.daily.sunrise?.[i],
       sunset: raw.daily.sunset?.[i],
-      uvMax: raw.daily.uv_index_max?.[i],
     };
   });
 }
@@ -441,8 +460,8 @@ function renderHero() {
   document.getElementById("heroCond").textContent = WCODE[row.wcode] ?? "–";
   document.getElementById("heroFeels").textContent = Math.round(avg) + "°";
   document.getElementById("heroWind").textContent =
-    row.wind != null ? Math.round(row.wind) + " km/h" + (row.gust != null && row.gust > row.wind + 10 ? " (Böen " + Math.round(row.gust) + ")" : "") : "–";
-  document.getElementById("heroUV").textContent = today && today.uvMax != null ? today.uvMax.toFixed(1) : "–";
+    extras.wind != null ? Math.round(extras.wind) + " km/h" + (extras.gust != null && extras.gust > extras.wind + 10 ? " (Böen " + Math.round(extras.gust) + ")" : "") : "–";
+  document.getElementById("heroUV").textContent = extras.uvMax != null ? extras.uvMax.toFixed(1) : "–";
   if (today) {
     document.getElementById("heroSun").textContent =
       (today.sunrise ? fmtTime(today.sunrise) : "–") + " / " + (today.sunset ? fmtTime(today.sunset) : "–");
@@ -479,14 +498,17 @@ function drawGauge(spread, color) {
 function renderStormRow() {
   const el = document.getElementById("stormRow");
   const now = Date.now();
-  const upcoming = hourlyRows.filter(r => {
+  const upcoming = extras.capeHourly.filter(r => {
     const t = new Date(r.time).getTime();
     return t >= now - 30*60*1000 && t <= now + 6*60*60*1000;
   });
-  if (!upcoming.length) { el.style.display = "none"; return; }
+  const thunderHour = hourlyRows.find(r => {
+    const t = new Date(r.time).getTime();
+    return t >= now - 30*60*1000 && t <= now + 6*60*60*1000 && [95,96,99].includes(r.wcode);
+  });
+  if (!upcoming.length && !thunderHour) { el.style.display = "none"; return; }
 
-  const maxCape = Math.max(...upcoming.map(r => r.cape ?? 0));
-  const thunderHour = upcoming.find(r => [95,96,99].includes(r.wcode));
+  const maxCape = upcoming.length ? Math.max(...upcoming.map(r => r.cape ?? 0)) : 0;
 
   if (thunderHour || maxCape >= 1000) {
     el.className = "storm-row" + (thunderHour || maxCape >= 1800 ? " high" : "");
@@ -835,12 +857,14 @@ async function loadAll() {
   document.getElementById("statusLine").textContent = "Lade Vorhersagen von drei Modellen …";
   dayIdx = 0;
   try {
-    const [forecast, alerts, radar] = await Promise.all([
+    const [forecast, extrasRaw, alerts, radar] = await Promise.all([
       fetchForecast(current),
+      fetchExtras(current),
       fetchAlerts(current),
       fetchRadar(current),
     ]);
     processForecast(forecast);
+    processExtras(extrasRaw);
     renderWarnings(alerts);
     renderHero();
     renderDayTabs();

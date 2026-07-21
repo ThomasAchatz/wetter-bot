@@ -1,6 +1,6 @@
 // Wetter Straubing — Service Worker
 // WICHTIG: CACHE-Version bei jedem Release hochzählen, synchron mit APP_VERSION in index.html
-const CACHE = "wetter-bot-v3";
+const CACHE = "wetter-bot-v4";
 
 const ASSETS = [
   "./",
