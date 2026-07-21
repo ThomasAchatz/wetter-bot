@@ -239,7 +239,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.3
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.4
 </div>
 
 <!-- Standort-Modal -->
@@ -256,7 +256,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.3";
+const APP_VERSION = "v1.4";
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -269,7 +269,7 @@ const MODELS = [
 // Open-Meteo "splitModels": erstes angefragtes Modell kommt UNsuffixiert zurück,
 // alle weiteren mit _<model>-Suffix. Reihenfolge der URL muss dazu passen.
 function fieldFor(varName, modelIndex, modelId) {
-  return modelIndex === 0 ? varName : `${varName}_${modelId}`;
+  return `${varName}_${modelId}`;
 }
 
 // ---------- State ----------
