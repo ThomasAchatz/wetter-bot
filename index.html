@@ -239,7 +239,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.4
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.5
 </div>
 
 <!-- Standort-Modal -->
@@ -256,7 +256,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.4";
+const APP_VERSION = "v1.5";
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -362,7 +362,11 @@ async function fetchAlerts(loc) {
 
 async function fetchRadar(loc) {
   try {
-    const url = `https://api.brightsky.dev/radar?lat=${loc.lat}&lon=${loc.lon}&distance=150000&format=plain&tz=Europe%2FBerlin`;
+    const now = new Date();
+    const from = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+    const to = new Date(now.getTime() + 2 * 60 * 60 * 1000); // technisches Limit der DWD-Nowcast
+    const url = `https://api.brightsky.dev/radar?lat=${loc.lat}&lon=${loc.lon}&distance=150000&format=plain` +
+      `&date=${from.toISOString()}&last_date=${to.toISOString()}&tz=Europe%2FBerlin`;
     const res = await fetch(url);
     if (!res.ok) return null;
     return res.json();
@@ -432,8 +436,8 @@ function processForecast(raw) {
         model: m,
         precip: raw.daily[fieldFor("precipitation_probability_max", mi, m.id)]?.[i],
       })),
-      sunrise: raw.daily.sunrise?.[i],
-      sunset: raw.daily.sunset?.[i],
+      sunrise: raw.daily[fieldFor("sunrise", 0, MODELS[0].id)]?.[i],
+      sunset: raw.daily[fieldFor("sunset", 0, MODELS[0].id)]?.[i],
     };
   });
 }
