@@ -33,8 +33,22 @@
     --font-display:'Space Grotesk', system-ui, sans-serif;
     --font-body:'Inter', system-ui, sans-serif;
   }
+  html[data-theme="light"]{
+    --bg:#f4efe4;
+    --panel:#ffffff;
+    --panel-2:#f4efe2;
+    --border:#e1d6c2;
+    --paper:#211c14;
+    --muted:#8a7a63;
+    --copper:#a9672a;
+    --teal:#2f7d74;
+    --rose:#b1435a;
+    --good:#3f7a45;
+    --warn:#a8781f;
+    --bad:#b1435a;
+  }
   *{box-sizing:border-box; -webkit-tap-highlight-color:transparent;}
-  html,body{margin:0; padding:0; background:var(--bg); color:var(--paper); font-family:var(--font-body);}
+  html,body{margin:0; padding:0; background:var(--bg); color:var(--paper); font-family:var(--font-body); transition:background .2s, color .2s;}
   body{padding-bottom:48px;}
   h1,h2,h3{font-family:var(--font-display); margin:0;}
   button{font-family:var(--font-body); cursor:pointer;}
@@ -189,6 +203,7 @@
     </div>
   </button>
   <div style="display:flex; gap:8px;">
+    <button class="icon-btn" id="themeToggle" title="Hell/Dunkel umschalten">🌙</button>
     <button class="icon-btn" id="refreshBtn" title="Aktualisieren">⟳</button>
     <button class="icon-btn" id="openLocModal" title="Ort wechseln">📍</button>
   </div>
@@ -218,6 +233,11 @@
     </div>
   </div>
   <div id="stormRow" class="storm-row" style="display:none;"></div>
+</div>
+
+<div id="rainSoonCard" class="card" style="display:none;">
+  <div class="card-title">Nächste 2 Stunden <span class="card-sub" id="rainSoonSub">Regenradar</span></div>
+  <canvas id="rainSoonChart" height="90"></canvas>
 </div>
 
 <div id="daytabs" class="daytabs"></div>
@@ -261,7 +281,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.7
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.9
 </div>
 
 <!-- Standort-Modal -->
@@ -278,7 +298,10 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.7";
+const APP_VERSION = "v1.9";
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
 const DEFAULT_LOCATIONS = [{ name: "Straubing", lat: 48.8742, lon: 12.5731 }];
 const STORAGE_LOCATIONS = "wetterbot_locations";
 const STORAGE_CURRENT = "wetterbot_current";
@@ -361,7 +384,7 @@ async function fetchForecast(loc) {
 // vermutlich weil nicht jedes Modell jede Variable liefert.
 async function fetchExtras(loc) {
   const url = `https://api.open-meteo.com/v1/forecast?latitude=${loc.lat}&longitude=${loc.lon}` +
-    `&current=wind_speed_10m,wind_gusts_10m` +
+    `&current=wind_speed_10m,wind_gusts_10m,apparent_temperature` +
     `&hourly=cape` +
     `&daily=uv_index_max` +
     `&timezone=Europe%2FBerlin&forecast_days=2&wind_speed_unit=kmh`;
@@ -415,6 +438,7 @@ function processExtras(raw) {
   if (!raw) { extras = { wind: null, gust: null, uvMax: null, capeHourly: [] }; return; }
   extras.wind = raw.current?.wind_speed_10m ?? null;
   extras.gust = raw.current?.wind_gusts_10m ?? null;
+  extras.feels = raw.current?.apparent_temperature ?? null;
   extras.uvMax = raw.daily?.uv_index_max?.[0] ?? null;
   extras.capeHourly = (raw.hourly?.time || []).map((t, i) => ({ time: t, cape: raw.hourly.cape?.[i] }));
 }
@@ -484,7 +508,7 @@ function renderHero() {
   const avg = vals.reduce((a,b)=>a+b,0)/vals.length;
   document.getElementById("heroTemp").textContent = Math.round(avg);
   document.getElementById("heroCond").textContent = WCODE[row.wcode] ?? "–";
-  document.getElementById("heroFeels").textContent = Math.round(avg) + "°";
+  document.getElementById("heroFeels").textContent = extras.feels != null ? Math.round(extras.feels) + "°" : "–";
   document.getElementById("heroWind").textContent =
     extras.wind != null ? Math.round(extras.wind) + " km/h" + (extras.gust != null && extras.gust > extras.wind + 10 ? " (Böen " + Math.round(extras.gust) + ")" : "") : "–";
   document.getElementById("heroUV").textContent = extras.uvMax != null ? extras.uvMax.toFixed(1) : "–";
@@ -516,7 +540,7 @@ function drawGauge(spread, color) {
   const px = cx + r * Math.cos(endAngle), py = cy + r * Math.sin(endAngle);
   const largeArc = pct > 0.5 ? 1 : 0;
   svg.innerHTML = `
-    <path d="M ${x1} ${y1} A ${r} ${r} 0 1 1 ${x2} ${y2}" fill="none" stroke="#3a3227" stroke-width="6" stroke-linecap="round"/>
+    <path d="M ${x1} ${y1} A ${r} ${r} 0 1 1 ${x2} ${y2}" fill="none" stroke="${cssVar('--border')}" stroke-width="6" stroke-linecap="round"/>
     <path d="M ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${px} ${py}" fill="none" stroke="${color}" stroke-width="6" stroke-linecap="round"/>
   `;
 }
@@ -625,8 +649,8 @@ function renderChart() {
         }
       },
       scales: {
-        x: { ticks: { color: "#a89a85", maxTicksLimit: 8 }, grid: { color: "#3a3227" } },
-        y: { position: "left", ticks: { color: "#a89a85", callback: (v) => v + "°" }, grid: { color: "#3a3227" } },
+        x: { ticks: { color: cssVar("--muted"), maxTicksLimit: 8 }, grid: { color: cssVar("--border") } },
+        y: { position: "left", ticks: { color: cssVar("--muted"), callback: (v) => v + "°" }, grid: { color: cssVar("--border") } },
         y1: { position: "right", min: 0, max: 100, ticks: { color: "#5aa8ff", callback: (v) => v + "%" }, grid: { display: false } }
       }
     }
@@ -756,7 +780,7 @@ function renderDaysChart() {
         }
       },
       scales: {
-        x: { ticks: { color: "#a89a85", font: { size: 11 } }, grid: { display: false } },
+        x: { ticks: { color: cssVar("--muted"), font: { size: 11 } }, grid: { display: false } },
         y: { display: false, grid: { display: false } }
       }
     },
@@ -767,12 +791,16 @@ function renderDaysChart() {
 function renderWarnings(alerts) {
   const el = document.getElementById("warnArea");
   if (!alerts || !alerts.length) { el.innerHTML = ""; return; }
-  el.innerHTML = alerts.map(a => `
-    <div class="warn-banner">
+  const sevColor = { minor: "#e0a83e", moderate: "#e0a83e", severe: "#d3697a", extreme: "#d3697a" };
+  el.innerHTML = alerts.map(a => {
+    const col = sevColor[a.severity] || "#d3697a";
+    return `
+    <div class="warn-banner" style="border-color:${col}66; background:${col}22;">
       ⚠️
-      <div><b>${a.headline || a.event}</b><br>gültig bis ${a.expires ? fmtTime(a.expires) + " Uhr" : "unbekannt"}</div>
+      <div><b style="color:${col}">${a.headline_de || a.event_de || "Amtliche Warnung"}</b><br>gültig bis ${a.expires ? fmtTime(a.expires) + " Uhr" : "unbekannt"}</div>
     </div>
-  `).join("");
+  `;
+  }).join("");
 }
 
 // Farbskala für den Radar-Heatmap (mm/5min, grob an RADOLAN angelehnt)
@@ -822,6 +850,7 @@ function renderRadar(radarJson) {
   slider.value = startIdx;
   drawRadarFrame(startIdx);
   renderRadarMarkers();
+  renderRainSoon();
   wrap.style.display = "block";
 }
 
@@ -889,6 +918,66 @@ function renderRadarMarkers() {
     marker.innerHTML = `<span class="label">${loc.name}</span><span class="dot"></span>`;
     el.appendChild(marker);
   });
+}
+
+let rainSoonChart = null;
+
+// Liest an der Position des gewählten Ortes den Radar-Pixel aus allen Frames
+// der nächsten 2 Std. aus — echte Radarmessung/-Nowcast statt Modellschätzung,
+// die Daten sind eh schon geladen (dieselbe Antwort wie für die Radarkarte).
+function renderRainSoon() {
+  const card = document.getElementById("rainSoonCard");
+  if (!radarFrames.length || !radarGeometry) { card.style.display = "none"; return; }
+
+  const frac = geoToFraction(current.lon, current.lat);
+  if (!frac) { card.style.display = "none"; return; }
+
+  const grid0 = radarFrames[0].precipitation_5;
+  const h = grid0.length, w = grid0[0].length;
+  const px = Math.min(w - 1, Math.max(0, Math.round(frac.s * (w - 1))));
+  const py = Math.min(h - 1, Math.max(0, Math.round(frac.t * (h - 1))));
+
+  const now = Date.now();
+  const points = radarFrames
+    .map(f => ({ time: f.timestamp, mm: (f.precipitation_5[py]?.[px] ?? 0) / 10 }))
+    .filter(p => {
+      const t = new Date(p.time).getTime();
+      return t >= now - 2 * 60 * 1000 && t <= now + 121 * 60 * 1000;
+    });
+
+  if (!points.length) { card.style.display = "none"; return; }
+
+  const anyRain = points.some(p => p.mm > 0.1);
+  const firstRain = points.find(p => p.mm > 0.1);
+  document.getElementById("rainSoonSub").textContent = anyRain
+    ? `Regen ab ca. ${fmtTime(firstRain.time)} Uhr`
+    : "Kein Niederschlag erwartet";
+
+  const ctx = document.getElementById("rainSoonChart").getContext("2d");
+  if (rainSoonChart) rainSoonChart.destroy();
+  rainSoonChart = new Chart(ctx, {
+    type: "bar",
+    data: {
+      labels: points.map(p => fmtHour(p.time)),
+      datasets: [{
+        data: points.map(p => p.mm),
+        backgroundColor: points.map(p => p.mm > 0.1 ? "#5aa8ff" : "rgba(90,168,255,0.18)"),
+        borderRadius: 2,
+      }],
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { display: false },
+        tooltip: { callbacks: { label: (item) => `${item.raw.toFixed(1)} mm / 5 Min` } }
+      },
+      scales: {
+        x: { ticks: { color: cssVar("--muted"), maxTicksLimit: 5, font: { size: 10 } }, grid: { display: false } },
+        y: { display: false, suggestedMax: 1 }
+      }
+    }
+  });
+  card.style.display = "block";
 }
 
 // ---------- Zoom & Pan ----------
@@ -1122,6 +1211,25 @@ async function loadAll() {
 }
 
 document.getElementById("refreshBtn").onclick = loadAll;
+
+// ---------- Theme ----------
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  document.getElementById("themeToggle").textContent = theme === "light" ? "☀️" : "🌙";
+  document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4efe4" : "#1b1712");
+}
+function initTheme() {
+  const saved = localStorage.getItem("wetterbot_theme") || "dark";
+  applyTheme(saved);
+}
+document.getElementById("themeToggle").onclick = () => {
+  const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
+  localStorage.setItem("wetterbot_theme", next);
+  applyTheme(next);
+  // Charts/Gauge nutzen Farben, die zum Zeitpunkt des Zeichnens ausgelesen werden — neu zeichnen:
+  if (hourlyRows.length) { renderHero(); renderChart(); renderOverview(); }
+};
+initTheme();
 
 // ---------- Start ----------
 if (!locations.some(l => l.name === current.name)) {
