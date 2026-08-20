@@ -223,6 +223,7 @@
       <span>Wind <b id="heroWind">–</b></span>
       <span>UV-Index <b id="heroUV">–</b></span>
       <span>Sonne <b id="heroSun">–</b></span>
+      <span>Mond <b id="heroMoon">–</b></span>
     </div>
   </div>
   <div class="gauge-wrap">
@@ -281,7 +282,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v1.9
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v2.0
 </div>
 
 <!-- Standort-Modal -->
@@ -298,7 +299,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v1.9";
+const APP_VERSION = "v2.0";
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -355,6 +356,22 @@ function fmtDate(iso) {
 }
 function fmtTime(iso) {
   return new Date(iso).toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+}
+
+// Mondphase per einfacher astronomischer Näherung (synodischer Monat), keine API nötig
+function moonFraction(date) {
+  const synodic = 29.530588853;
+  const knownNewMoonDays = Date.UTC(2000, 0, 6, 18, 14) / 86400000;
+  const days = date.getTime() / 86400000;
+  const phase = ((days - knownNewMoonDays) % synodic + synodic) % synodic;
+  return phase / synodic; // 0..1
+}
+function moonInfo(frac) {
+  const icons = ["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"];
+  const names = ["Neumond","Zunehmende Sichel","Erstes Viertel","Zunehmender Mond","Vollmond","Abnehmender Mond","Letztes Viertel","Abnehmende Sichel"];
+  const idx = Math.floor(frac * 8 + 0.5) % 8;
+  const illum = Math.round((1 - Math.cos(2 * Math.PI * frac)) / 2 * 100);
+  return { icon: icons[idx], name: `${names[idx]} (${illum}%)` };
 }
 
 const WCODE = {
@@ -516,6 +533,8 @@ function renderHero() {
     document.getElementById("heroSun").textContent =
       (today.sunrise ? fmtTime(today.sunrise) : "–") + " / " + (today.sunset ? fmtTime(today.sunset) : "–");
   }
+  const moon = moonInfo(moonFraction(new Date()));
+  document.getElementById("heroMoon").textContent = `${moon.icon} ${moon.name}`;
 
   renderStormRow();
 
@@ -1219,8 +1238,17 @@ function applyTheme(theme) {
   document.querySelector('meta[name="theme-color"]').setAttribute("content", theme === "light" ? "#f4efe4" : "#1b1712");
 }
 function initTheme() {
-  const saved = localStorage.getItem("wetterbot_theme") || "dark";
-  applyTheme(saved);
+  const saved = localStorage.getItem("wetterbot_theme");
+  const systemLight = window.matchMedia && window.matchMedia("(prefers-color-scheme: light)").matches;
+  applyTheme(saved || (systemLight ? "light" : "dark"));
+
+  if (!saved && window.matchMedia) {
+    window.matchMedia("(prefers-color-scheme: light)").addEventListener("change", (e) => {
+      if (localStorage.getItem("wetterbot_theme")) return; // manuell übersteuert -> Auto-Wechsel ignorieren
+      applyTheme(e.matches ? "light" : "dark");
+      if (hourlyRows.length) { renderHero(); renderChart(); renderOverview(); }
+    });
+  }
 }
 document.getElementById("themeToggle").onclick = () => {
   const next = document.documentElement.getAttribute("data-theme") === "light" ? "dark" : "light";
