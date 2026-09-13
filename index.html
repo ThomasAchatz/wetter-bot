@@ -282,7 +282,7 @@
 
 <div class="footer-note">
   Daten: Open-Meteo (DWD ICON, NOAA GFS, ECMWF IFS) &amp; Bright Sky/DWD (Radar, Warnungen) ·
-  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v2.0
+  Höchst-/Tiefstwerte = Mittelwert der drei Modelle · v2.1
 </div>
 
 <!-- Standort-Modal -->
@@ -299,7 +299,7 @@
 
 <script>
 // ---------- Konfiguration ----------
-const APP_VERSION = "v2.0";
+const APP_VERSION = "v2.1";
 function cssVar(name) {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
 }
@@ -730,11 +730,23 @@ const dayHighlightPlugin = {
     ctx.fillStyle = "rgba(243,237,225,0.06)";
     const r = 10;
     ctx.beginPath();
-    ctx.roundRect(bandX, chartArea.top, bandW, chartArea.height, r);
+    drawRoundedRectPath(ctx, bandX, chartArea.top, bandW, chartArea.height, r);
     ctx.fill();
     ctx.restore();
   }
 };
+
+// Ersatz für ctx.roundRect() (erst ab iOS 16 / Safari 16 verfügbar) —
+// zeichnet denselben Pfad manuell, damit ältere iPhones nicht daran scheitern.
+function drawRoundedRectPath(ctx, x, y, w, h, r) {
+  r = Math.min(r, w / 2, h / 2);
+  ctx.moveTo(x + r, y);
+  ctx.arcTo(x + w, y, x + w, y + h, r);
+  ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r);
+  ctx.arcTo(x, y, x + w, y, r);
+  ctx.closePath();
+}
 
 // Zeigt Höchst-/Tiefstwert direkt über bzw. unter jedem Punkt an
 const dayLabelsPlugin = {
@@ -1030,6 +1042,7 @@ function clampPan() {
 }
 
 (function setupRadarPanZoom() {
+ try {
   const vp = document.getElementById("radarViewport");
   const pointers = new Map();
   let lastMid = null, lastDist = null;
@@ -1096,16 +1109,22 @@ function clampPan() {
     zoomAt(1/1.4, rect.width / 2, rect.height / 2);
   };
   document.getElementById("radarZoomReset").onclick = resetRadarView;
+ } catch (e) {
+   console.error("Radar-Zoom-Setup fehlgeschlagen (unkritisch, Rest der App läuft weiter):", e);
+ }
 })();
 
-document.getElementById("radarSlider").addEventListener("input", (e) => {
-  stopRadarPlay();
-  drawRadarFrame(+e.target.value);
-});
-
-document.getElementById("radarPlayBtn").onclick = () => {
-  radarPlaying ? stopRadarPlay() : startRadarPlay();
-};
+try {
+  document.getElementById("radarSlider").addEventListener("input", (e) => {
+    stopRadarPlay();
+    drawRadarFrame(+e.target.value);
+  });
+  document.getElementById("radarPlayBtn").onclick = () => {
+    radarPlaying ? stopRadarPlay() : startRadarPlay();
+  };
+} catch (e) {
+  console.error("Radar-Slider-Setup fehlgeschlagen (unkritisch):", e);
+}
 
 function startRadarPlay() {
   if (!radarFrames.length) return;
@@ -1159,36 +1178,6 @@ function renderFavList() {
   });
 }
 
-let searchTimer = null;
-document.getElementById("searchInput").addEventListener("input", (e) => {
-  clearTimeout(searchTimer);
-  const q = e.target.value.trim();
-  const resEl = document.getElementById("searchResults");
-  if (q.length < 2) { resEl.innerHTML = ""; return; }
-  searchTimer = setTimeout(async () => {
-    const results = await geocode(q);
-    resEl.innerHTML = results.map(r => `
-      <div class="search-result">
-        <span>${r.name}${r.admin1 ? ", " + r.admin1 : ""}</span>
-        <button class="add-btn" data-lat="${r.latitude}" data-lon="${r.longitude}" data-name="${r.name}">Hinzufügen</button>
-      </div>
-    `).join("") || `<div class="search-result">Keine Treffer</div>`;
-    resEl.querySelectorAll(".add-btn").forEach(btn => {
-      btn.onclick = () => {
-        const newLoc = { name: btn.dataset.name, lat: parseFloat(btn.dataset.lat), lon: parseFloat(btn.dataset.lon) };
-        if (!locations.some(l => l.name === newLoc.name)) {
-          locations.push(newLoc);
-          saveLocations();
-        }
-        current = newLoc;
-        saveCurrent();
-        closeModal();
-        loadAll();
-      };
-    });
-  }, 400);
-});
-
 function openModal() {
   renderFavList();
   document.getElementById("modalOverlay").classList.add("open");
@@ -1198,9 +1187,44 @@ function closeModal() {
   document.getElementById("searchInput").value = "";
   document.getElementById("searchResults").innerHTML = "";
 }
-document.getElementById("openLocModal").onclick = openModal;
-document.getElementById("locBtn").onclick = openModal;
-document.getElementById("modalOverlay").onclick = (e) => { if (e.target.id === "modalOverlay") closeModal(); };
+
+try {
+  let searchTimer = null;
+  document.getElementById("searchInput").addEventListener("input", (e) => {
+    clearTimeout(searchTimer);
+    const q = e.target.value.trim();
+    const resEl = document.getElementById("searchResults");
+    if (q.length < 2) { resEl.innerHTML = ""; return; }
+    searchTimer = setTimeout(async () => {
+      const results = await geocode(q);
+      resEl.innerHTML = results.map(r => `
+        <div class="search-result">
+          <span>${r.name}${r.admin1 ? ", " + r.admin1 : ""}</span>
+          <button class="add-btn" data-lat="${r.latitude}" data-lon="${r.longitude}" data-name="${r.name}">Hinzufügen</button>
+        </div>
+      `).join("") || `<div class="search-result">Keine Treffer</div>`;
+      resEl.querySelectorAll(".add-btn").forEach(btn => {
+        btn.onclick = () => {
+          const newLoc = { name: btn.dataset.name, lat: parseFloat(btn.dataset.lat), lon: parseFloat(btn.dataset.lon) };
+          if (!locations.some(l => l.name === newLoc.name)) {
+            locations.push(newLoc);
+            saveLocations();
+          }
+          current = newLoc;
+          saveCurrent();
+          closeModal();
+          loadAll();
+        };
+      });
+    }, 400);
+  });
+
+  document.getElementById("openLocModal").onclick = openModal;
+  document.getElementById("locBtn").onclick = openModal;
+  document.getElementById("modalOverlay").onclick = (e) => { if (e.target.id === "modalOverlay") closeModal(); };
+} catch (e) {
+  console.error("Standort-Modal-Setup fehlgeschlagen:", e);
+}
 
 // ---------- Laden ----------
 async function loadAll() {
